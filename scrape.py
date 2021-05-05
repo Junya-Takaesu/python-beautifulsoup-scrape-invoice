@@ -1,46 +1,63 @@
 from bs4 import BeautifulSoup
+from collections import OrderedDict
+from pprint import pprint
 import csv
 
 table_types = {
     "meta_info": 1,
     "customer_info": 2,
-    "order_dtail": 3,
+    "order_detail": 3,
     "price_summary": 4
 }
 
-excluded_headers = {
-    "customer_info": [0, 1, 2, 17, 18, 19, 33, 36]
-}
+excluded_headers = ["利用クーポンID一覧", "クーポン値引き", "ご要望"]
 
-def get_headers(table, type):
-    th_tags = []
-    if type in [table_types["meta_info"], table_types["order_dtail"], table_types["price_summary"]]:
-        th_tags = list(map(lambda tag: tag.text.strip(), table.select("th")))
-    elif type == table_types["customer_info"]:
-        th_tags = list(map(lambda tag: tag.text.strip(), table.select("th")))
-        th_tags = [th_tag for index, th_tag in enumerate(th_tags) if index not in excluded_headers["customer_info"]]
-        th_tags = list(filter(len, th_tags))
-    return th_tags
+def generate_dictionary_from_table_data(th_tags, table_type="default"):
+    result = OrderedDict()
 
-def get_rows(table, type):
-    return "hoge"
+    for th_tag in th_tags:
+        th_tag_text = th_tag.text.strip()
 
-def retrieve_data(purchase_order):
-    result = {}
-    first_table_index = 0
-    # th_tags = purchase_order.select("th")
-    # result = map(lambda tag: tag.text.strip(), th_tags)
-    # return list(result)
-    # tables = purchase_order.select("table")
+        if th_tag.find_next_sibling("td") and th_tag_text not in excluded_headers:
+            td_tag_text = th_tag.find_next_sibling("td").text.strip()
+
+            if table_type == table_types["customer_info"]:
+                if th_tag_text in result:
+                    result[th_tag_text + "(ご請求先情報)"] = td_tag_text
+                else:
+                    result[th_tag_text] = td_tag_text
+            else:
+                result[th_tag_text] = td_tag_text
+
+    return result
+
+
+def retrieve_dictionary_data(purchase_order):
+    data = OrderedDict()
+    data_array = []
     tables = purchase_order.find_all("table", recursive=False)
-    headers = []
-    for index, table in enumerate(tables):
-        if index == first_table_index:
-            continue
-        headers = headers + get_headers(table=table, type=index)
-        rows = get_rows(table=table, type=index)
 
-    return headers
+    for index, table in enumerate(tables):
+        if index == 0:
+            continue
+        elif index == table_types["customer_info"]:
+            data = {**data, **generate_dictionary_from_table_data(table.select("th"), table_type=table_types["customer_info"])}
+        elif index == table_types["order_detail"]:
+            order_records = []
+            for index, tr_tag in enumerate(table.select("tr")):
+                if index == 0:
+                    order_record_headers = list(map(lambda tag: tag.text.strip(), tr_tag.select("th")))
+                else:
+                    order_record_data = list(map(lambda tag: tag.text.strip(), tr_tag.select("td")))
+                    order_record = list(zip(order_record_headers, order_record_data))
+                    order_records.append(order_record)
+        else:
+            data = {**data, **generate_dictionary_from_table_data(table.select("th"))}
+
+    for order_record in order_records:
+        data_array.append(OrderedDict({**data, **OrderedDict(order_record)}))
+
+    return data_array
 
 def main():
     file = open("html/yahoo_dummy20210417.html")
@@ -49,11 +66,23 @@ def main():
 
     purchase_orders = soup.select("#wrapper")
 
-    rows = {}
+    data_dictionaries = []
 
     for purchase_order in purchase_orders:
-        data = retrieve_data(purchase_order=purchase_order)
-        print(data)
-        # {"注文ID": "283982938", "注文日時": "2021年4月15日8時34分18秒", ....}
+        for _data_dictionary in retrieve_dictionary_data(purchase_order=purchase_order):
+            data_dictionaries.append(_data_dictionary)
+
+    with open('result/data.csv', 'w', newline='') as csvfile:
+        fieldnames = []
+
+        for data in data_dictionaries:
+            if not fieldnames:
+                fieldnames = data.keys()
+
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+
+        for data in data_dictionaries:
+            writer.writerow(data)
 
 main()
